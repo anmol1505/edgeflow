@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"golang.org/x/sync/singleflight"
 )
 
 const (
@@ -20,15 +22,20 @@ type responseRecorder struct {
 }
 
 func newRecorder() *responseRecorder {
-	return &responseRecorder{
-		header:     make(http.Header),
-		statusCode: 200,
-	}
+	return &responseRecorder{header: make(http.Header), statusCode: 200}
 }
 
 func (r *responseRecorder) Header() http.Header         { return r.header }
 func (r *responseRecorder) WriteHeader(code int)        { r.statusCode = code }
 func (r *responseRecorder) Write(b []byte) (int, error) { return r.body.Write(b) }
+
+type cachedResponse struct {
+	statusCode int
+	header     http.Header
+	body       []byte
+}
+
+var group singleflight.Group
 
 func CacheKey(r *http.Request) string {
 	return r.Method + ":" + r.URL.Path
@@ -46,6 +53,28 @@ func isCacheable(r *http.Request, statusCode int) bool {
 		return false
 	}
 	return true
+}
+
+// safeHeaders copies headers except hop-by-hop ones
+func safeHeaders(src http.Header) http.Header {
+	dst := make(http.Header)
+	skip := map[string]bool{
+		"Content-Length":    true,
+		"Transfer-Encoding": true,
+		"Connection":        true,
+		"Keep-Alive":        true,
+		"Proxy-Authenticate": true,
+		"Proxy-Authorization": true,
+		"Te":      true,
+		"Trailer": true,
+		"Upgrade": true,
+	}
+	for k, v := range src {
+		if !skip[k] {
+			dst[k] = v
+		}
+	}
+	return dst
 }
 
 func writeEntry(w http.ResponseWriter, entry *Entry, cacheStatus string) {
@@ -71,32 +100,30 @@ func Middleware(c *Cache, next http.Handler) http.Handler {
 		}
 
 		key := CacheKey(r)
-		slog.Info("cache lookup", "key", key)
 
 		if entry, ok := c.Get(key); ok {
 			if !entry.IsExpired() {
 				if r.Header.Get("If-None-Match") == entry.ETag && entry.ETag != "" {
 					w.Header().Set("X-Cache", "HIT")
 					w.WriteHeader(http.StatusNotModified)
-					slog.Info("cache hit 304", "key", key)
 					return
 				}
 				writeEntry(w, entry, "HIT")
-				slog.Info("cache hit", "key", key)
+				slog.Debug("cache hit", "key", key)
 				return
 			}
-
 			if !entry.IsStale() {
 				writeEntry(w, entry, "STALE")
-				slog.Info("cache stale, revalidating", "key", key)
 				go func() {
 					rec := newRecorder()
 					next.ServeHTTP(rec, r)
 					if isCacheable(r, rec.statusCode) {
+						body := make([]byte, rec.body.Len())
+						copy(body, rec.body.Bytes())
 						c.Set(key, &Entry{
 							StatusCode: rec.statusCode,
-							Headers:    rec.header,
-							Body:       rec.body.Bytes(),
+							Headers:    safeHeaders(rec.header),
+							Body:       body,
 							ExpiresAt:  time.Now().Add(defaultTTL),
 							StaleAt:    time.Now().Add(defaultTTL + staleWindow),
 							ETag:       rec.header.Get("ETag"),
@@ -107,28 +134,45 @@ func Middleware(c *Cache, next http.Handler) http.Handler {
 			}
 		}
 
-		// Cache MISS
-		rec := newRecorder()
-		next.ServeHTTP(rec, r)
+		// Cache MISS with singleflight
+		v, err, _ := group.Do(key, func() (interface{}, error) {
+			rec := newRecorder()
+			next.ServeHTTP(rec, r)
+			body := make([]byte, rec.body.Len())
+			copy(body, rec.body.Bytes())
+			resp := &cachedResponse{
+				statusCode: rec.statusCode,
+				header:     safeHeaders(rec.header),
+				body:       body,
+			}
+			if isCacheable(r, rec.statusCode) {
+				c.Set(key, &Entry{
+					StatusCode: rec.statusCode,
+					Headers:    safeHeaders(rec.header),
+					Body:       body,
+					ExpiresAt:  time.Now().Add(defaultTTL),
+					StaleAt:    time.Now().Add(defaultTTL + staleWindow),
+					ETag:       rec.header.Get("ETag"),
+				})
+				slog.Debug("cache miss, stored", "key", key)
+			}
+			return resp, nil
+		})
 
-		if isCacheable(r, rec.statusCode) {
-			c.Set(key, &Entry{
-				StatusCode: rec.statusCode,
-				Headers:    rec.header,
-				Body:       rec.body.Bytes(),
-				ExpiresAt:  time.Now().Add(defaultTTL),
-				StaleAt:    time.Now().Add(defaultTTL + staleWindow),
-				ETag:       rec.header.Get("ETag"),
-			})
-			slog.Info("cache miss, stored", "key", key)
+		if err != nil {
+			http.Error(w, "origin error", http.StatusBadGateway)
+			return
 		}
 
+		resp := v.(*cachedResponse)
 		w.Header().Set("X-Cache", "MISS")
 		w.Header().Set("X-Proxied-By", "EdgeFlow")
-		for k, v := range rec.header {
-			w.Header()[k] = v
+		for k, v := range resp.header {
+			if k != "X-Cache" && k != "X-Proxied-By" {
+				w.Header()[k] = v
+			}
 		}
-		w.WriteHeader(rec.statusCode)
-		w.Write(rec.body.Bytes())
+		w.WriteHeader(resp.statusCode)
+		w.Write(resp.body)
 	})
 }

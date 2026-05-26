@@ -39,7 +39,7 @@ func main() {
 	c := cache.New(1000)
 
 	sec := security.New(security.Config{
-		RateLimit:    10,
+		RateLimit:    100,
 		MaxBodyBytes: 1 << 20,
 		Blocklist:    []string{},
 		Allowlist:    []string{},

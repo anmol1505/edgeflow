@@ -8,11 +8,12 @@ import (
 func main() {
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintf(w, `{"message": "Hello from Origin 1!", "path": "%s"}`, r.URL.Path)
+		w.WriteHeader(200)
+		fmt.Fprint(w, `{"message": "Hello from Origin 1!", "status": "ok"}`)
 	})
 	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(200)
-		w.Write([]byte(`{"status":"ok"}`))
+		fmt.Fprint(w, `{"status":"ok"}`)
 	})
 	fmt.Println("Origin 1 running on :9000")
 	http.ListenAndServe(":9000", nil)
