@@ -39,7 +39,7 @@ func main() {
 	c := cache.New(1000)
 
 	sec := security.New(security.Config{
-		RateLimit:    3,
+		RateLimit:    10,
 		MaxBodyBytes: 1 << 20,
 		Blocklist:    []string{},
 		Allowlist:    []string{},
@@ -47,7 +47,6 @@ func main() {
 
 	mux := http.NewServeMux()
 
-	// Health endpoint
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{
@@ -59,10 +58,9 @@ func main() {
 		})
 	})
 
-	// Prometheus metrics endpoint
 	mux.Handle("/metrics", promhttp.Handler())
+	mux.Handle("/dashboard", observability.Dashboard())
 
-	// Cache invalidation API
 	mux.HandleFunc("/admin/cache/invalidate", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -88,10 +86,10 @@ func main() {
 		http.Error(w, "provide key or prefix", http.StatusBadRequest)
 	})
 
-	// Full pipeline: Observability -> Security -> Cache -> Proxy
 	mux.Handle("/", observability.Middleware(sec.Handler(cache.Middleware(c, p))))
 
 	slog.Info("EdgeFlow starting", "port", port, "origins", originList)
+	slog.Info("Dashboard available at http://localhost:" + port + "/dashboard")
 
 	if err := http.ListenAndServe(":"+port, mux); err != nil {
 		slog.Error("server failed", "error", err)
