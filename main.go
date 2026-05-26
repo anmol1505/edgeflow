@@ -22,6 +22,11 @@ func main() {
 		port = "8080"
 	}
 
+	jwtSecret := os.Getenv("JWT_SECRET")
+	if jwtSecret == "" {
+		jwtSecret = "edgeflow-secret-key-change-in-production"
+	}
+
 	cfgWatcher, err := controlplane.NewConfigWatcher("config.json")
 	if err != nil {
 		slog.Error("failed to load config", "error", err)
@@ -50,6 +55,15 @@ func main() {
 		Allowlist:    cfg.Allowlist,
 	})
 
+	// JWT middleware - exclude public paths
+	jwtMiddleware := security.NewJWTMiddleware(jwtSecret, []string{
+		"/health",
+		"/metrics",
+		"/dashboard",
+		"/auth/token",
+		"/admin",
+	})
+
 	cfgWatcher.OnChange(func(newCfg controlplane.Config) {
 		sec.UpdateConfig(security.Config{
 			RateLimit:    newCfg.RateLimit,
@@ -57,14 +71,12 @@ func main() {
 			Blocklist:    newCfg.Blocklist,
 			Allowlist:    newCfg.Allowlist,
 		})
-		slog.Info("security config hot-reloaded",
-			"rate_limit", newCfg.RateLimit,
-			"blocklist", newCfg.Blocklist,
-		)
+		slog.Info("config hot-reloaded", "rate_limit", newCfg.RateLimit)
 	})
 
 	mux := http.NewServeMux()
 
+	// Public endpoints
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		currentCfg := cfgWatcher.Get()
@@ -80,6 +92,36 @@ func main() {
 				"rate_limit": currentCfg.RateLimit,
 				"blocklist":  currentCfg.Blocklist,
 			},
+		})
+	})
+
+	// Token generation endpoint
+	mux.HandleFunc("/auth/token", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var body struct {
+			UserID string `json:"user_id"`
+			Role   string `json:"role"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.UserID == "" {
+			http.Error(w, "provide user_id and role", http.StatusBadRequest)
+			return
+		}
+		if body.Role == "" {
+			body.Role = "user"
+		}
+		token, err := jwtMiddleware.GenerateToken(body.UserID, body.Role)
+		if err != nil {
+			http.Error(w, "failed to generate token", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{
+			"token":   token,
+			"user_id": body.UserID,
+			"role":    body.Role,
 		})
 	})
 
@@ -116,17 +158,20 @@ func main() {
 		http.Error(w, "provide key or prefix", http.StatusBadRequest)
 	})
 
+	// Full pipeline with JWT: Observability -> JWT -> Compression -> Security -> Cache -> Proxy
 	mux.Handle("/", observability.Middleware(
-		proxy.CompressionMiddleware(
-			sec.Handler(
-				cache.Middleware(c, p),
+		jwtMiddleware.Handler(
+			proxy.CompressionMiddleware(
+				sec.Handler(
+					cache.Middleware(c, p),
+				),
 			),
 		),
 	))
 
 	slog.Info("EdgeFlow starting", "port", port, "origins", cfg.Origins)
 	slog.Info("Dashboard at http://localhost:"+port+"/dashboard")
-	slog.Info("LB strategy: consistent hashing with virtual nodes")
+	slog.Info("JWT auth enabled, get token at POST /auth/token")
 
 	if err := http.ListenAndServe(":"+port, mux); err != nil {
 		slog.Error("server failed", "error", err)
