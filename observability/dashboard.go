@@ -23,13 +23,15 @@ const dashboardHTML = `<!DOCTYPE html>
   body { background: #0f1117; color: #e2e8f0; font-family: 'Segoe UI', sans-serif; padding: 24px; }
   h1 { font-size: 28px; font-weight: 700; color: #60a5fa; margin-bottom: 4px; }
   .subtitle { color: #64748b; font-size: 14px; margin-bottom: 32px; }
-  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 32px; }
+  .grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 24px; }
+  .grid-2 { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; margin-bottom: 24px; }
   .card { background: #1e2130; border-radius: 12px; padding: 20px; border: 1px solid #2d3748; }
   .card-label { font-size: 12px; color: #64748b; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px; }
   .card-value { font-size: 32px; font-weight: 700; color: #60a5fa; }
   .card-value.green { color: #34d399; }
   .card-value.red { color: #f87171; }
   .card-value.yellow { color: #fbbf24; }
+  .card-value.purple { color: #a78bfa; }
   .section { background: #1e2130; border-radius: 12px; padding: 24px; border: 1px solid #2d3748; margin-bottom: 16px; }
   .section h2 { font-size: 16px; color: #94a3b8; margin-bottom: 16px; text-transform: uppercase; letter-spacing: 1px; }
   .bar-row { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
@@ -54,11 +56,12 @@ const dashboardHTML = `<!DOCTYPE html>
   .latency-value { font-size: 22px; font-weight: 700; color: #a78bfa; }
   .updated { font-size: 11px; color: #374151; text-align: right; margin-top: 16px; }
   .logo { display: inline-block; background: #1d4ed8; color: white; padding: 2px 10px; border-radius: 6px; font-size: 12px; font-weight: 700; margin-left: 10px; vertical-align: middle; }
+  .tag { display: inline-block; background: #1e3a5f; color: #60a5fa; padding: 2px 8px; border-radius: 4px; font-size: 11px; margin-left: 6px; }
 </style>
 </head>
 <body>
 <h1>EdgeFlow <span class="logo">LIVE</span></h1>
-<p class="subtitle">Edge Proxy · CDN · Load Balancer · Observability</p>
+<p class="subtitle">Edge Proxy · CDN · Load Balancer · Compression · Observability</p>
 
 <div class="grid">
   <div class="card">
@@ -79,51 +82,68 @@ const dashboardHTML = `<!DOCTYPE html>
   </div>
 </div>
 
-<div class="section">
-  <h2>Cache Performance</h2>
-  <div class="bar-row">
-    <div class="bar-label">HIT</div>
-    <div class="bar-bg"><div class="bar-fill hit" id="bar-hit" style="width:0%"></div></div>
-    <div class="bar-count" id="count-hit">0</div>
+<div class="grid-2">
+  <div class="section">
+    <h2>Cache Performance</h2>
+    <div class="bar-row">
+      <div class="bar-label">HIT</div>
+      <div class="bar-bg"><div class="bar-fill hit" id="bar-hit" style="width:0%"></div></div>
+      <div class="bar-count" id="count-hit">0</div>
+    </div>
+    <div class="bar-row">
+      <div class="bar-label">MISS</div>
+      <div class="bar-bg"><div class="bar-fill miss" id="bar-miss" style="width:0%"></div></div>
+      <div class="bar-count" id="count-miss">0</div>
+    </div>
+    <div class="bar-row">
+      <div class="bar-label">STALE</div>
+      <div class="bar-bg"><div class="bar-fill stale" id="bar-stale" style="width:0%"></div></div>
+      <div class="bar-count" id="count-stale">0</div>
+    </div>
   </div>
-  <div class="bar-row">
-    <div class="bar-label">MISS</div>
-    <div class="bar-bg"><div class="bar-fill miss" id="bar-miss" style="width:0%"></div></div>
-    <div class="bar-count" id="count-miss">0</div>
-  </div>
-  <div class="bar-row">
-    <div class="bar-label">STALE</div>
-    <div class="bar-bg"><div class="bar-fill stale" id="bar-stale" style="width:0%"></div></div>
-    <div class="bar-count" id="count-stale">0</div>
+
+  <div class="section">
+    <h2>Latency (p50 / p95 / p99)</h2>
+    <div class="latency-grid">
+      <div class="latency-card">
+        <div class="latency-label">p50 median</div>
+        <div class="latency-value" id="p50">—</div>
+      </div>
+      <div class="latency-card">
+        <div class="latency-label">p95</div>
+        <div class="latency-value" id="p95">—</div>
+      </div>
+      <div class="latency-card">
+        <div class="latency-label">p99</div>
+        <div class="latency-value" id="p99">—</div>
+      </div>
+    </div>
   </div>
 </div>
 
-<div class="section">
-  <h2>Latency (p50 / p95 / p99)</h2>
-  <div class="latency-grid">
-    <div class="latency-card">
-      <div class="latency-label">p50 median</div>
-      <div class="latency-value" id="p50">—</div>
+<div class="grid-2">
+  <div class="section">
+    <h2>Origin Health</h2>
+    <div id="origins-list"><div style="color:#64748b">Loading...</div></div>
+  </div>
+
+  <div class="section">
+    <h2>System Status</h2>
+    <div id="cb-state"><div style="color:#64748b">Loading...</div></div>
+    <div id="cache-items" style="margin-top:8px"></div>
+    <div class="origin-row" style="margin-top:8px">
+      <span>Compression</span>
+      <span class="badge healthy">gzip + brotli</span>
     </div>
-    <div class="latency-card">
-      <div class="latency-label">p95</div>
-      <div class="latency-value" id="p95">—</div>
+    <div class="origin-row">
+      <span>Singleflight Dedup</span>
+      <span class="badge healthy">enabled</span>
     </div>
-    <div class="latency-card">
-      <div class="latency-label">p99</div>
-      <div class="latency-value" id="p99">—</div>
+    <div class="origin-row">
+      <span>Stale-While-Revalidate</span>
+      <span class="badge healthy">enabled</span>
     </div>
   </div>
-</div>
-
-<div class="section">
-  <h2>Origin Health</h2>
-  <div id="origins-list"><div style="color:#64748b">Loading...</div></div>
-</div>
-
-<div class="section">
-  <h2>Circuit Breaker</h2>
-  <div id="cb-state"><div style="color:#64748b">Loading...</div></div>
 </div>
 
 <div class="updated" id="updated">Refreshing every 2s...</div>
@@ -222,6 +242,10 @@ async function update() {
     const cb = health.circuit_breaker || 'unknown';
     document.getElementById('cb-state').innerHTML =
       '<div class="origin-row"><span>Circuit Breaker</span><span class="badge ' + cb + '">' + cb + '</span></div>';
+
+    const cacheStats = health.cache_stats || {};
+    document.getElementById('cache-items').innerHTML =
+      '<div class="origin-row"><span>Cached Items</span><span style="color:#60a5fa;font-weight:700">' + (cacheStats.items || 0) + ' / ' + (cacheStats.max_items || 0) + '</span></div>';
 
     document.getElementById('updated').textContent = 'Last updated: ' + new Date().toLocaleTimeString();
   } catch(e) { console.error(e); }
