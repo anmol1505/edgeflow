@@ -86,10 +86,18 @@ func main() {
 		http.Error(w, "provide key or prefix", http.StatusBadRequest)
 	})
 
-	mux.Handle("/", observability.Middleware(sec.Handler(cache.Middleware(c, p))))
+	// Compression wraps everything so both cached and uncached responses are compressed
+	// Observability -> Compression -> Security -> Cache -> Proxy
+	mux.Handle("/", observability.Middleware(
+		proxy.CompressionMiddleware(
+			sec.Handler(
+				cache.Middleware(c, p),
+			),
+		),
+	))
 
 	slog.Info("EdgeFlow starting", "port", port, "origins", originList)
-	slog.Info("Dashboard available at http://localhost:" + port + "/dashboard")
+	slog.Info("Dashboard at http://localhost:" + port + "/dashboard")
 
 	if err := http.ListenAndServe(":"+port, mux); err != nil {
 		slog.Error("server failed", "error", err)
