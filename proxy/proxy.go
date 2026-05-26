@@ -20,7 +20,7 @@ func New(loadBalancer *lb.LoadBalancer) *Proxy {
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 
-	origin := p.lb.Next()
+	origin := p.lb.Pick(r)
 	if origin == nil {
 		http.Error(w, "no healthy origins available", http.StatusBadGateway)
 		slog.Error("all origins unhealthy")

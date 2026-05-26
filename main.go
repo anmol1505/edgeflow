@@ -22,7 +22,6 @@ func main() {
 		port = "8080"
 	}
 
-	// Load config with hot-reload
 	cfgWatcher, err := controlplane.NewConfigWatcher("config.json")
 	if err != nil {
 		slog.Error("failed to load config", "error", err)
@@ -30,13 +29,11 @@ func main() {
 	}
 
 	cfg := cfgWatcher.Get()
-
-	// Override origins from env if set
 	if originsEnv := os.Getenv("ORIGINS"); originsEnv != "" {
 		cfg.Origins = strings.Split(originsEnv, ",")
 	}
 
-	balancer, err := lb.New(cfg.Origins)
+	balancer, err := lb.NewWithStrategy(cfg.Origins, lb.ConsistentHash)
 	if err != nil {
 		slog.Error("failed to create load balancer", "error", err)
 		os.Exit(1)
@@ -53,7 +50,6 @@ func main() {
 		Allowlist:    cfg.Allowlist,
 	})
 
-	// Hot-reload: update security config when config.json changes
 	cfgWatcher.OnChange(func(newCfg controlplane.Config) {
 		sec.UpdateConfig(security.Config{
 			RateLimit:    newCfg.RateLimit,
@@ -78,6 +74,8 @@ func main() {
 			"healthy_origins": balancer.HealthyOrigins(),
 			"cache_stats":     c.Stats(),
 			"circuit_breaker": sec.CircuitBreaker().State(),
+			"hash_ring_size":  balancer.RingSize(),
+			"lb_strategy":     "consistent_hash",
 			"config": map[string]any{
 				"rate_limit": currentCfg.RateLimit,
 				"blocklist":  currentCfg.Blocklist,
@@ -88,7 +86,6 @@ func main() {
 	mux.Handle("/metrics", promhttp.Handler())
 	mux.Handle("/dashboard", observability.Dashboard())
 
-	// Config reload endpoint
 	mux.HandleFunc("/admin/config", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(cfgWatcher.Get())
@@ -128,8 +125,8 @@ func main() {
 	))
 
 	slog.Info("EdgeFlow starting", "port", port, "origins", cfg.Origins)
-	slog.Info("Dashboard at http://localhost:" + port + "/dashboard")
-	slog.Info("Config hot-reload watching config.json")
+	slog.Info("Dashboard at http://localhost:"+port+"/dashboard")
+	slog.Info("LB strategy: consistent hashing with virtual nodes")
 
 	if err := http.ListenAndServe(":"+port, mux); err != nil {
 		slog.Error("server failed", "error", err)
