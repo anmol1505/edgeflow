@@ -9,8 +9,10 @@ import (
 
 	"github.com/anmol1505/edgeflow/cache"
 	"github.com/anmol1505/edgeflow/lb"
+	"github.com/anmol1505/edgeflow/observability"
 	"github.com/anmol1505/edgeflow/proxy"
 	"github.com/anmol1505/edgeflow/security"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 func main() {
@@ -37,14 +39,15 @@ func main() {
 	c := cache.New(1000)
 
 	sec := security.New(security.Config{
-		RateLimit:    3,        // 3 requests/sec per IP (easy to trigger)
-		MaxBodyBytes: 1 << 20, // 1MB
+		RateLimit:    3,
+		MaxBodyBytes: 1 << 20,
 		Blocklist:    []string{},
 		Allowlist:    []string{},
 	})
 
 	mux := http.NewServeMux()
 
+	// Health endpoint
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{
@@ -56,6 +59,10 @@ func main() {
 		})
 	})
 
+	// Prometheus metrics endpoint
+	mux.Handle("/metrics", promhttp.Handler())
+
+	// Cache invalidation API
 	mux.HandleFunc("/admin/cache/invalidate", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -81,7 +88,8 @@ func main() {
 		http.Error(w, "provide key or prefix", http.StatusBadRequest)
 	})
 
-	mux.Handle("/", sec.Handler(cache.Middleware(c, p)))
+	// Full pipeline: Observability -> Security -> Cache -> Proxy
+	mux.Handle("/", observability.Middleware(sec.Handler(cache.Middleware(c, p))))
 
 	slog.Info("EdgeFlow starting", "port", port, "origins", originList)
 
