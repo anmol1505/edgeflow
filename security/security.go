@@ -9,8 +9,6 @@ import (
 	"time"
 )
 
-// ---- Token Bucket Rate Limiter ----
-
 type bucket struct {
 	tokens   float64
 	lastSeen time.Time
@@ -19,8 +17,8 @@ type bucket struct {
 type RateLimiter struct {
 	mu       sync.Mutex
 	buckets  map[string]*bucket
-	rate     float64 // tokens per second
-	capacity float64 // max tokens
+	rate     float64
+	capacity float64
 }
 
 func NewRateLimiter(rate, capacity float64) *RateLimiter {
@@ -36,13 +34,11 @@ func NewRateLimiter(rate, capacity float64) *RateLimiter {
 func (rl *RateLimiter) Allow(ip string) bool {
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
-
 	b, ok := rl.buckets[ip]
 	if !ok {
 		rl.buckets[ip] = &bucket{tokens: rl.capacity, lastSeen: time.Now()}
 		return true
 	}
-
 	now := time.Now()
 	elapsed := now.Sub(b.lastSeen).Seconds()
 	b.tokens += elapsed * rl.rate
@@ -50,7 +46,6 @@ func (rl *RateLimiter) Allow(ip string) bool {
 		b.tokens = rl.capacity
 	}
 	b.lastSeen = now
-
 	if b.tokens < 1 {
 		return false
 	}
@@ -71,14 +66,12 @@ func (rl *RateLimiter) cleanup() {
 	}
 }
 
-// ---- Circuit Breaker ----
-
 type CircuitState int
 
 const (
-	StateClosed   CircuitState = iota // normal
-	StateOpen                         // blocking requests
-	StateHalfOpen                     // testing recovery
+	StateClosed   CircuitState = iota
+	StateOpen
+	StateHalfOpen
 )
 
 type CircuitBreaker struct {
@@ -92,24 +85,19 @@ type CircuitBreaker struct {
 }
 
 func NewCircuitBreaker(threshold int, timeout time.Duration) *CircuitBreaker {
-	return &CircuitBreaker{
-		threshold: threshold,
-		timeout:   timeout,
-		state:     StateClosed,
-	}
+	return &CircuitBreaker{threshold: threshold, timeout: timeout, state: StateClosed}
 }
 
 func (cb *CircuitBreaker) Allow() bool {
 	cb.mu.Lock()
 	defer cb.mu.Unlock()
-
 	switch cb.state {
 	case StateClosed:
 		return true
 	case StateOpen:
 		if time.Since(cb.lastFailure) > cb.timeout {
 			cb.state = StateHalfOpen
-			slog.Info("circuit breaker half-open, testing recovery")
+			slog.Info("circuit breaker half-open")
 			return true
 		}
 		return false
@@ -127,7 +115,7 @@ func (cb *CircuitBreaker) RecordSuccess() {
 	if cb.state == StateHalfOpen && cb.successes >= 2 {
 		cb.state = StateClosed
 		cb.successes = 0
-		slog.Info("circuit breaker closed, origin recovered")
+		slog.Info("circuit breaker closed")
 	}
 }
 
@@ -139,8 +127,7 @@ func (cb *CircuitBreaker) RecordFailure() {
 	cb.successes = 0
 	if cb.failures >= cb.threshold {
 		cb.state = StateOpen
-		slog.Warn("circuit breaker open, blocking requests",
-			"failures", cb.failures)
+		slog.Warn("circuit breaker open", "failures", cb.failures)
 	}
 }
 
@@ -157,8 +144,6 @@ func (cb *CircuitBreaker) State() string {
 	}
 	return "unknown"
 }
-
-// ---- IP Filter ----
 
 type IPFilter struct {
 	blocklist map[string]bool
@@ -192,16 +177,15 @@ func (f *IPFilter) IsAllowed(ip string) bool {
 	return true
 }
 
-// ---- Middleware ----
-
 type Config struct {
-	RateLimit    float64  // requests per second per IP
-	MaxBodyBytes int64    // max request body size
-	Blocklist    []string // blocked IPs
-	Allowlist    []string // allowed IPs (empty = allow all)
+	RateLimit    float64
+	MaxBodyBytes int64
+	Blocklist    []string
+	Allowlist    []string
 }
 
 type Middleware struct {
+	mu             sync.RWMutex
 	limiter        *RateLimiter
 	circuitBreaker *CircuitBreaker
 	ipFilter       *IPFilter
@@ -229,8 +213,13 @@ func (m *Middleware) Handler(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ip := getIP(r)
 
-		// IP filter
-		if !m.ipFilter.IsAllowed(ip) {
+		m.mu.RLock()
+		limiter := m.limiter
+		ipFilter := m.ipFilter
+		maxBodyBytes := m.maxBodyBytes
+		m.mu.RUnlock()
+
+		if !ipFilter.IsAllowed(ip) {
 			slog.Warn("blocked IP", "ip", ip)
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusForbidden)
@@ -238,8 +227,7 @@ func (m *Middleware) Handler(next http.Handler) http.Handler {
 			return
 		}
 
-		// Rate limiting
-		if !m.limiter.Allow(ip) {
+		if !limiter.Allow(ip) {
 			slog.Warn("rate limited", "ip", ip)
 			w.Header().Set("Content-Type", "application/json")
 			w.Header().Set("Retry-After", "1")
@@ -248,24 +236,22 @@ func (m *Middleware) Handler(next http.Handler) http.Handler {
 			return
 		}
 
-		// Circuit breaker
 		if !m.circuitBreaker.Allow() {
-			slog.Warn("circuit breaker open, rejecting request")
+			slog.Warn("circuit breaker open")
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusServiceUnavailable)
 			json.NewEncoder(w).Encode(map[string]string{"error": "service unavailable"})
 			return
 		}
 
-		// Request size limit
-		if m.maxBodyBytes > 0 && r.ContentLength > m.maxBodyBytes {
+		if maxBodyBytes > 0 && r.ContentLength > maxBodyBytes {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusRequestEntityTooLarge)
 			json.NewEncoder(w).Encode(map[string]string{"error": "request too large"})
 			return
 		}
-		if m.maxBodyBytes > 0 {
-			r.Body = http.MaxBytesReader(w, r.Body, m.maxBodyBytes)
+		if maxBodyBytes > 0 {
+			r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
 		}
 
 		next.ServeHTTP(w, r)
@@ -274,4 +260,14 @@ func (m *Middleware) Handler(next http.Handler) http.Handler {
 
 func (m *Middleware) CircuitBreaker() *CircuitBreaker {
 	return m.circuitBreaker
+}
+
+func (m *Middleware) UpdateConfig(cfg Config) {
+	newLimiter := NewRateLimiter(cfg.RateLimit, cfg.RateLimit*3)
+	newFilter := NewIPFilter(cfg.Blocklist, cfg.Allowlist)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.limiter = newLimiter
+	m.ipFilter = newFilter
+	m.maxBodyBytes = cfg.MaxBodyBytes
 }

@@ -1,0 +1,9 @@
+{
+  "rate_limit": 100,
+  "max_body_bytes": 1048576,
+  "blocklist": [],
+  "allowlist": [],
+  "origins": ["http://localhost:9000", "http://localhost:9001"],
+  "cache_max_items": 1000,
+  "cache_ttl_secs": 60
+}

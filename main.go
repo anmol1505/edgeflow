@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 
+	controlplane "github.com/anmol1505/edgeflow/control-plane"
 	"github.com/anmol1505/edgeflow/cache"
 	"github.com/anmol1505/edgeflow/lb"
 	"github.com/anmol1505/edgeflow/observability"
@@ -16,50 +17,82 @@ import (
 )
 
 func main() {
-	originsEnv := os.Getenv("ORIGINS")
-	if originsEnv == "" {
-		originsEnv = "http://localhost:9000,http://localhost:9001"
-	}
-
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"
 	}
 
-	originList := strings.Split(originsEnv, ",")
+	// Load config with hot-reload
+	cfgWatcher, err := controlplane.NewConfigWatcher("config.json")
+	if err != nil {
+		slog.Error("failed to load config", "error", err)
+		os.Exit(1)
+	}
 
-	balancer, err := lb.New(originList)
+	cfg := cfgWatcher.Get()
+
+	// Override origins from env if set
+	if originsEnv := os.Getenv("ORIGINS"); originsEnv != "" {
+		cfg.Origins = strings.Split(originsEnv, ",")
+	}
+
+	balancer, err := lb.New(cfg.Origins)
 	if err != nil {
 		slog.Error("failed to create load balancer", "error", err)
 		os.Exit(1)
 	}
 	balancer.StartHealthChecks()
 
+	c := cache.New(cfg.CacheMaxItems)
 	p := proxy.New(balancer)
-	c := cache.New(1000)
 
 	sec := security.New(security.Config{
-		RateLimit:    100,
-		MaxBodyBytes: 1 << 20,
-		Blocklist:    []string{},
-		Allowlist:    []string{},
+		RateLimit:    cfg.RateLimit,
+		MaxBodyBytes: cfg.MaxBodyBytes,
+		Blocklist:    cfg.Blocklist,
+		Allowlist:    cfg.Allowlist,
+	})
+
+	// Hot-reload: update security config when config.json changes
+	cfgWatcher.OnChange(func(newCfg controlplane.Config) {
+		sec.UpdateConfig(security.Config{
+			RateLimit:    newCfg.RateLimit,
+			MaxBodyBytes: newCfg.MaxBodyBytes,
+			Blocklist:    newCfg.Blocklist,
+			Allowlist:    newCfg.Allowlist,
+		})
+		slog.Info("security config hot-reloaded",
+			"rate_limit", newCfg.RateLimit,
+			"blocklist", newCfg.Blocklist,
+		)
 	})
 
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
+		currentCfg := cfgWatcher.Get()
 		json.NewEncoder(w).Encode(map[string]any{
 			"status":          "ok",
 			"service":         "edgeflow",
 			"healthy_origins": balancer.HealthyOrigins(),
 			"cache_stats":     c.Stats(),
 			"circuit_breaker": sec.CircuitBreaker().State(),
+			"config": map[string]any{
+				"rate_limit": currentCfg.RateLimit,
+				"blocklist":  currentCfg.Blocklist,
+			},
 		})
 	})
 
 	mux.Handle("/metrics", promhttp.Handler())
 	mux.Handle("/dashboard", observability.Dashboard())
+
+	// Config reload endpoint
+	mux.HandleFunc("/admin/config", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(cfgWatcher.Get())
+	})
 
 	mux.HandleFunc("/admin/cache/invalidate", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -86,8 +119,6 @@ func main() {
 		http.Error(w, "provide key or prefix", http.StatusBadRequest)
 	})
 
-	// Compression wraps everything so both cached and uncached responses are compressed
-	// Observability -> Compression -> Security -> Cache -> Proxy
 	mux.Handle("/", observability.Middleware(
 		proxy.CompressionMiddleware(
 			sec.Handler(
@@ -96,8 +127,9 @@ func main() {
 		),
 	))
 
-	slog.Info("EdgeFlow starting", "port", port, "origins", originList)
+	slog.Info("EdgeFlow starting", "port", port, "origins", cfg.Origins)
 	slog.Info("Dashboard at http://localhost:" + port + "/dashboard")
+	slog.Info("Config hot-reload watching config.json")
 
 	if err := http.ListenAndServe(":"+port, mux); err != nil {
 		slog.Error("server failed", "error", err)
