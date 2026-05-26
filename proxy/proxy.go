@@ -4,44 +4,53 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httputil"
-	"net/url"
 	"time"
+
+	"github.com/anmol1505/edgeflow/lb"
 )
 
 type Proxy struct {
-	target   *url.URL
-	reverseProxy *httputil.ReverseProxy
+	lb *lb.LoadBalancer
 }
 
-func New(targetURL string) (*Proxy, error) {
-	target, err := url.Parse(targetURL)
-	if err != nil {
-		return nil, err
-	}
-
-	rp := httputil.NewSingleHostReverseProxy(target)
-
-	rp.ModifyResponse = func(resp *http.Response) error {
-		resp.Header.Set("X-Proxied-By", "EdgeFlow")
-		return nil
-	}
-
-	return &Proxy{target: target, reverseProxy: rp}, nil
+func New(loadBalancer *lb.LoadBalancer) *Proxy {
+	return &Proxy{lb: loadBalancer}
 }
 
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 
-	// Add forwarding headers
-	r.Header.Set("X-Forwarded-Host", r.Host)
-	r.Header.Set("X-Origin-Host", p.target.Host)
+	origin := p.lb.Next()
+	if origin == nil {
+		http.Error(w, "no healthy origins available", http.StatusBadGateway)
+		slog.Error("all origins unhealthy")
+		return
+	}
 
-	p.reverseProxy.ServeHTTP(w, r)
+	rp := httputil.NewSingleHostReverseProxy(origin.URL)
+
+	rp.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
+		p.lb.MarkFailure(origin)
+		slog.Error("origin request failed", "url", origin.URL.String(), "error", err)
+		http.Error(w, "origin error", http.StatusBadGateway)
+	}
+
+	rp.ModifyResponse = func(resp *http.Response) error {
+		p.lb.MarkSuccess(origin)
+		resp.Header.Set("X-Proxied-By", "EdgeFlow")
+		resp.Header.Set("X-Origin", origin.URL.Host)
+		return nil
+	}
+
+	r.Header.Set("X-Forwarded-Host", r.Host)
+	r.Header.Set("X-Origin-Host", origin.URL.Host)
+
+	rp.ServeHTTP(w, r)
 
 	slog.Info("request",
 		"method", r.Method,
 		"path", r.URL.Path,
+		"origin", origin.URL.Host,
 		"duration_ms", time.Since(start).Milliseconds(),
-		"remote_addr", r.RemoteAddr,
 	)
 }
