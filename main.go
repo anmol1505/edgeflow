@@ -10,6 +10,7 @@ import (
 	"github.com/anmol1505/edgeflow/cache"
 	"github.com/anmol1505/edgeflow/lb"
 	"github.com/anmol1505/edgeflow/proxy"
+	"github.com/anmol1505/edgeflow/security"
 )
 
 func main() {
@@ -33,11 +34,17 @@ func main() {
 	balancer.StartHealthChecks()
 
 	p := proxy.New(balancer)
-	c := cache.New(1000) // max 1000 cached items
+	c := cache.New(1000)
+
+	sec := security.New(security.Config{
+		RateLimit:    3,        // 3 requests/sec per IP (easy to trigger)
+		MaxBodyBytes: 1 << 20, // 1MB
+		Blocklist:    []string{},
+		Allowlist:    []string{},
+	})
 
 	mux := http.NewServeMux()
 
-	// Health endpoint
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{
@@ -45,10 +52,10 @@ func main() {
 			"service":         "edgeflow",
 			"healthy_origins": balancer.HealthyOrigins(),
 			"cache_stats":     c.Stats(),
+			"circuit_breaker": sec.CircuitBreaker().State(),
 		})
 	})
 
-	// Cache invalidation API
 	mux.HandleFunc("/admin/cache/invalidate", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -59,22 +66,22 @@ func main() {
 			Prefix string `json:"prefix"`
 		}
 		json.NewDecoder(r.Body).Decode(&body)
-
 		if body.Key != "" {
 			c.Delete(body.Key)
+			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]any{"invalidated": body.Key})
 			return
 		}
 		if body.Prefix != "" {
 			count := c.InvalidatePrefix(body.Prefix)
+			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]any{"invalidated_count": count})
 			return
 		}
 		http.Error(w, "provide key or prefix", http.StatusBadRequest)
 	})
 
-	// All traffic goes through cache middleware then proxy
-	mux.Handle("/", cache.Middleware(c, p))
+	mux.Handle("/", sec.Handler(cache.Middleware(c, p)))
 
 	slog.Info("EdgeFlow starting", "port", port, "origins", originList)
 
