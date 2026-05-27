@@ -2,3 +2,5 @@ edgeflow
 *.exe
 *.out
 .DS_Store
+certs/*.pem
+certs/*.key
