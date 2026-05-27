@@ -1,12 +1,13 @@
 <div align="center">
 
-# ⚡ EdgeFlow
+# EdgeFlow
 
-**A production-style edge infrastructure platform built in Go**
+**Production-style edge infrastructure platform built in Go**
 
 ![Go](https://img.shields.io/badge/Go-1.21+-00ADD8?style=flat-square&logo=go&logoColor=white)
 ![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)
 ![Status](https://img.shields.io/badge/Status-Active-success?style=flat-square)
+![Tests](https://img.shields.io/badge/Tests-Passing-brightgreen?style=flat-square)
 ![Features](https://img.shields.io/badge/Features-15-blue?style=flat-square)
 
 *Reverse proxy · CDN caching · Load balancing · Security · Observability*
@@ -19,26 +20,26 @@
 
 ## Overview
 
-EdgeFlow is a from-scratch edge proxy written in Go that combines the core responsibilities of a CDN, reverse proxy, and API gateway into a single cohesive system. Built to demonstrate real infrastructure engineering — not just a tutorial project.
+EdgeFlow is a from-scratch edge proxy written in Go that combines the core responsibilities of a CDN, reverse proxy, and API gateway into a single cohesive system.
 
 ```
 Client
-  │
-  ▼
-┌─────────────────────────────────────────┐
-│              EdgeFlow                   │
-│                                         │
-│  OpenTelemetry Tracing                  │
-│  JWT Authentication                     │
-│  Gzip / Brotli Compression              │
-│  Rate Limiter · Circuit Breaker         │
-│  LRU Cache + Stale-While-Revalidate     │
-│  Singleflight Dedup                     │
-│  Consistent Hash Ring                   │
-│  Health Checks + Failover               │
-└─────────────────────────────────────────┘
-  │           │           │
-  ▼           ▼           ▼
+  |
+  v
++------------------------------------------+
+|              EdgeFlow                    |
+|                                          |
+|  OpenTelemetry Tracing                   |
+|  JWT Authentication                      |
+|  Gzip / Brotli Compression               |
+|  Rate Limiter · Circuit Breaker          |
+|  LRU Cache + Stale-While-Revalidate      |
+|  Singleflight Dedup                      |
+|  Consistent Hash Ring                    |
+|  Health Checks + Failover                |
++------------------------------------------+
+  |           |           |
+  v           v           v
 Origin 1   Origin 2   Origin N
 ```
 
@@ -46,53 +47,53 @@ Origin 1   Origin 2   Origin N
 
 ## Features
 
-### 🔀 Reverse Proxy
+### Reverse Proxy
 - HTTP/1.1 forwarding with connection pooling
 - Header rewriting and response streaming
 - Request ID tracing across all logs
 - WebSocket support with HTTP upgrade and bidirectional streaming
 
-### ⚖️ Load Balancer
-- Round-robin and **consistent hashing** (150 virtual nodes per origin)
+### Load Balancer
+- Round-robin and consistent hashing (150 virtual nodes per origin)
 - Session affinity — same client always routes to same origin
 - Active health checks with automatic failover and recovery
 - Unhealthy origins removed from hash ring, re-added on recovery
 
-### 🗄️ Edge Cache
+### Edge Cache
 - In-memory LRU with configurable capacity
-- TTL expiry + **stale-while-revalidate**
+- TTL expiry and stale-while-revalidate
 - ETag / If-None-Match support
-- **Singleflight deduplication** — prevents cache stampede under load
+- Singleflight deduplication — prevents cache stampede under load
 - Invalidation API by exact key or prefix
 - `X-Cache: HIT / MISS / STALE` headers
 
-### 🔒 Security
-- **Token bucket rate limiter** per IP
-- **Circuit breaker** — opens after 5 failures, recovers after 30s
+### Security
+- Token bucket rate limiter per IP
+- Circuit breaker — opens after 5 failures, recovers after 30s
 - IP allowlist / blocklist
-- **JWT authentication** with HS256, role-based claims
+- JWT authentication with HS256, role-based claims forwarded to origins
 - Request body size limits and timeouts
 
-### 🗜️ Compression
-- Brotli (preferred) + Gzip (fallback)
+### Compression
+- Brotli (preferred) and Gzip (fallback)
 - Automatic negotiation via `Accept-Encoding`
 - Skips already-compressed content types
 
-### 🔐 TLS
-- TLS 1.2+ with strong cipher suites
-- HTTP → HTTPS automatic redirect
-- Configurable cert/key paths
+### TLS
+- TLS 1.2+ with strong cipher suites (AES-256-GCM, AES-128-GCM)
+- HTTP to HTTPS automatic redirect (301)
+- Configurable certificate and key paths
 
-### 🔄 Config Hot-Reload
+### Config Hot-Reload
 - Watches `config.json` every 2 seconds
-- Zero-downtime updates to rate limits, blocklist, body limits
+- Zero-downtime updates to rate limits, blocklist, and body limits
 - No restart required
 
-### 📊 Observability
+### Observability
 - Prometheus metrics at `/metrics`
-- OpenTelemetry distributed tracing with span attributes
-- Structured JSON logs with request ID and cache status
-- Live admin dashboard at `/dashboard` (2s refresh)
+- OpenTelemetry distributed tracing with span attributes and context propagation
+- Structured JSON logs with request ID, method, path, status, and duration
+- Live admin dashboard at `/dashboard` with 2-second refresh
 - Grafana dashboard with Prometheus datasource
 
 ---
@@ -103,13 +104,13 @@ Origin 1   Origin 2   Origin N
 
 | Scenario | Req/sec | Avg Latency |
 |---|---|---|
-| 🟢 Direct Origin | 121,824 | 498µs |
-| ⚡ EdgeFlow Cached | 95,290 | 585µs |
+| Direct Origin | 121,824 | 498µs |
+| EdgeFlow (cached) | 95,290 | 585µs |
 
-- **87µs** added overhead per proxied request
-- **90%+** cache hit rate under normal traffic
-- **<1ms** p50 latency for cache hits
-- p99 latency: **5ms** under load
+- 87µs added overhead per proxied request
+- 90%+ cache hit rate under normal traffic
+- p50 latency under 1ms for cache hits
+- p99 latency 5ms under load
 
 ---
 
@@ -137,7 +138,7 @@ curl -X POST http://localhost:8080/auth/token \
   -H "Content-Type: application/json" \
   -d '{"user_id": "alice", "role": "admin"}'
 
-# Make authenticated requests (1st = MISS, 2nd = HIT)
+# Authenticated request (first = MISS, second = HIT)
 TOKEN="your_token_here"
 curl -H "Authorization: Bearer $TOKEN" http://localhost:8080/hello
 
@@ -146,6 +147,9 @@ wscat -c ws://localhost:8080/ws
 
 # Live dashboard
 open http://localhost:8080/dashboard
+
+# Prometheus metrics
+curl http://localhost:8080/metrics | grep edgeflow
 ```
 
 ```bash
@@ -154,11 +158,16 @@ TLS_ENABLED=true go run main.go
 curl -k https://localhost:8443/health
 ```
 
+```bash
+# Run tests
+go test ./...
+```
+
 ---
 
 ## Configuration
 
-`config.json` is hot-reloaded every 2 seconds — no restart needed:
+`config.json` is watched and hot-reloaded every 2 seconds:
 
 ```json
 {
@@ -177,8 +186,8 @@ curl -k https://localhost:8443/health
 | `PORT` | `8080` | Listen port |
 | `TLS_ENABLED` | `false` | Enable HTTPS |
 | `JWT_SECRET` | `edgeflow-secret-key` | JWT signing secret |
-| `CERT_FILE` | `certs/cert.pem` | TLS certificate |
-| `KEY_FILE` | `certs/key.pem` | TLS private key |
+| `CERT_FILE` | `certs/cert.pem` | TLS certificate path |
+| `KEY_FILE` | `certs/key.pem` | TLS private key path |
 
 ---
 
@@ -186,14 +195,14 @@ curl -k https://localhost:8443/health
 
 | Endpoint | Method | Auth | Description |
 |---|---|---|---|
-| `/health` | GET | ✗ | Health, origins, cache stats |
-| `/metrics` | GET | ✗ | Prometheus metrics |
-| `/dashboard` | GET | ✗ | Live admin dashboard |
-| `/auth/token` | POST | ✗ | Generate JWT token |
-| `/admin/config` | GET | ✗ | Current config |
-| `/admin/cache/invalidate` | POST | ✗ | Invalidate cache |
-| `/ws` | WS | ✗ | WebSocket proxy |
-| `/*` | ANY | ✓ | Proxied to origins |
+| `/health` | GET | No | Health, origin status, cache stats |
+| `/metrics` | GET | No | Prometheus metrics |
+| `/dashboard` | GET | No | Live admin dashboard |
+| `/auth/token` | POST | No | Generate JWT token |
+| `/admin/config` | GET | No | View current config |
+| `/admin/cache/invalidate` | POST | No | Invalidate cache by key or prefix |
+| `/ws` | WS | No | WebSocket proxy |
+| `/*` | ANY | JWT | Proxied to origins |
 
 ---
 
@@ -201,36 +210,40 @@ curl -k https://localhost:8443/health
 
 ```
 edgeflow/
-├── main.go                     # Entry point + middleware pipeline
+├── main.go                     # Entry point and middleware pipeline
 ├── config.json                 # Hot-reloadable runtime config
 ├── certs/                      # TLS certificates
 ├── proxy/
-│   ├── proxy.go                # HTTP forwarding
-│   ├── compression.go          # Gzip/Brotli middleware
+│   ├── proxy.go                # HTTP forwarding and header rewriting
+│   ├── compression.go          # Gzip and Brotli middleware
 │   ├── tls.go                  # TLS termination
 │   └── websocket.go            # WebSocket upgrade proxy
 ├── cache/
-│   ├── cache.go                # LRU + TTL + eviction
-│   └── middleware.go           # Cache middleware + singleflight
+│   ├── cache.go                # LRU cache, TTL, eviction
+│   ├── cache_test.go           # Cache unit tests
+│   └── middleware.go           # Cache middleware and singleflight
 ├── lb/
-│   ├── lb.go                   # Load balancer + health checks
-│   └── consistent_hash.go      # Consistent hash ring
+│   ├── lb.go                   # Load balancer and health checks
+│   ├── consistent_hash.go      # Consistent hash ring
+│   └── consistent_hash_test.go # Hash ring unit tests
 ├── security/
-│   ├── security.go             # Rate limiter + circuit breaker
+│   ├── security.go             # Rate limiter, circuit breaker, IP filter
+│   ├── ratelimiter_test.go     # Rate limiter unit tests
+│   ├── circuitbreaker_test.go  # Circuit breaker unit tests
 │   └── jwt.go                  # JWT middleware
 ├── observability/
-│   ├── metrics.go              # Prometheus metrics
-│   ├── middleware.go           # Logging + metrics
-│   ├── tracing.go              # OpenTelemetry
-│   └── dashboard.go            # Live dashboard
+│   ├── metrics.go              # Prometheus metric definitions
+│   ├── middleware.go           # Request logging and metrics
+│   ├── tracing.go              # OpenTelemetry setup
+│   └── dashboard.go            # Live admin dashboard
 ├── control-plane/
-│   └── config.go               # Config watcher
+│   └── config.go               # Config hot-reload watcher
 └── benchmarks/
-    ├── origin1/main.go
-    ├── origin2/main.go
-    ├── ws_server/main.go
-    ├── prometheus.yml
-    └── RESULTS.md
+    ├── origin1/main.go         # Test origin server 1
+    ├── origin2/main.go         # Test origin server 2
+    ├── ws_server/main.go       # WebSocket test server
+    ├── prometheus.yml          # Prometheus scrape config
+    └── RESULTS.md              # Benchmark results
 ```
 
 ---
@@ -239,20 +252,20 @@ edgeflow/
 
 ```
 Incoming Request
-  │
-  ├─► OpenTelemetry Span (trace ID, attributes)
-  ├─► Prometheus Metrics + Structured Log
-  ├─► JWT Auth (skip public paths)
-  ├─► Gzip/Brotli Compression
-  ├─► Rate Limiter (token bucket per IP)
-  ├─► Circuit Breaker
-  ├─► IP Filter
-  ├─► LRU Cache lookup
-  │     HIT ──► return cached response
-  │     MISS ─► singleflight.Do()
-  │               └─► Consistent Hash → pick origin
-  │                     └─► HTTP/WS forward
-  └─► Response + cache store
+  |
+  +-- OpenTelemetry Span
+  +-- Prometheus Metrics + Structured Log
+  +-- JWT Authentication
+  +-- Gzip / Brotli Compression
+  +-- Rate Limiter (token bucket per IP)
+  +-- Circuit Breaker
+  +-- IP Filter
+  +-- LRU Cache lookup
+  |     HIT --> return cached response
+  |     MISS -> singleflight.Do()
+  |               +-- Consistent Hash --> pick origin
+  |                     +-- HTTP / WebSocket forward
+  +-- Response + cache store
 ```
 
 ---
@@ -266,7 +279,7 @@ Incoming Request
 | Tracing | OpenTelemetry SDK |
 | Auth | `golang-jwt/jwt` |
 | Compression | `andybalholm/brotli` + stdlib gzip |
-| Dedup | `golang.org/x/sync/singleflight` |
+| Deduplication | `golang.org/x/sync/singleflight` |
 | Dashboards | Grafana + Prometheus |
 | Load Testing | `wrk` |
 
@@ -274,26 +287,25 @@ Incoming Request
 
 ## Milestones
 
-- [x] Reverse Proxy — HTTP forwarding, headers, logging
-- [x] Load Balancer — round-robin, health checks, failover
-- [x] Edge Cache — LRU, TTL, stale-while-revalidate
+- [x] Reverse proxy — HTTP forwarding, headers, structured logging
+- [x] Load balancer — round-robin, health checks, automatic failover
+- [x] Edge cache — LRU, TTL, stale-while-revalidate
 - [x] Security — rate limiting, circuit breaker, IP filtering
-- [x] Observability — Prometheus metrics, request tracing
-- [x] Admin Dashboard — live stats, 2s refresh
+- [x] Observability — Prometheus metrics, request ID tracing
+- [x] Admin dashboard — live stats with 2-second refresh
 - [x] Benchmarks — wrk load tests, results documented
-- [x] Compression — gzip + brotli with encoding negotiation
-- [x] Config Hot-Reload — zero downtime config updates
-- [x] Consistent Hashing — virtual nodes, session affinity
-- [x] JWT Authentication — HS256, role claims, public paths
-- [x] TLS Termination — TLS 1.2+, HTTP redirect
-- [x] OpenTelemetry Tracing — spans, attributes, propagation
-- [x] Grafana Dashboard — Prometheus datasource, live graphs
-- [x] WebSocket Support — HTTP upgrade, bidirectional proxy
+- [x] Compression — gzip and brotli with encoding negotiation
+- [x] Config hot-reload — zero downtime config updates
+- [x] Consistent hashing — virtual nodes, session affinity
+- [x] JWT authentication — HS256, role claims, public path exclusions
+- [x] TLS termination — TLS 1.2+, HTTP to HTTPS redirect
+- [x] OpenTelemetry tracing — spans, attributes, context propagation
+- [x] Grafana dashboard — Prometheus datasource, live graphs
+- [x] WebSocket support — HTTP upgrade, bidirectional streaming
+- [x] Unit tests — cache, rate limiter, circuit breaker, consistent hashing
 
 ---
 
-<div align="center">
+## License
 
-Built with Go · No frameworks · No shortcuts
-
-</div>
+MIT License — see [LICENSE](LICENSE) for details.
