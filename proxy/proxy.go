@@ -27,6 +27,17 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Handle WebSocket upgrade
+	if isWebSocketRequest(r) {
+		slog.Info("websocket upgrade request",
+			"path", r.URL.Path,
+			"origin", origin.URL.Host,
+		)
+		ProxyWebSocket(w, r, origin.URL.Host)
+		return
+	}
+
+	// Regular HTTP request
 	rp := httputil.NewSingleHostReverseProxy(origin.URL)
 
 	rp.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {

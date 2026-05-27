@@ -80,6 +80,7 @@ func main() {
 		"/dashboard",
 		"/auth/token",
 		"/admin",
+		"/ws",
 	})
 
 	cfgWatcher.OnChange(func(newCfg controlplane.Config) {
@@ -176,6 +177,10 @@ func main() {
 	})
 
 	// Full pipeline: Tracing -> Observability -> JWT -> Compression -> Security -> Cache -> Proxy
+	mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
+		proxy.ProxyWebSocket(w, r, "localhost:9002")
+	})
+
 	mux.Handle("/", observability.TracingMiddleware(
 		observability.Middleware(
 			jwtMiddleware.Handler(
