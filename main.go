@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -36,6 +37,14 @@ func main() {
 	if jwtSecret == "" {
 		jwtSecret = "edgeflow-secret-key-change-in-production"
 	}
+
+	// Initialize OpenTelemetry tracing
+	tp, err := observability.InitTracing()
+	if err != nil {
+		slog.Error("failed to initialize tracing", "error", err)
+		os.Exit(1)
+	}
+	defer tp.Shutdown(context.Background())
 
 	cfgWatcher, err := controlplane.NewConfigWatcher("config.json")
 	if err != nil {
@@ -166,11 +175,14 @@ func main() {
 		http.Error(w, "provide key or prefix", http.StatusBadRequest)
 	})
 
-	mux.Handle("/", observability.Middleware(
-		jwtMiddleware.Handler(
-			proxy.CompressionMiddleware(
-				sec.Handler(
-					cache.Middleware(c, p),
+	// Full pipeline: Tracing -> Observability -> JWT -> Compression -> Security -> Cache -> Proxy
+	mux.Handle("/", observability.TracingMiddleware(
+		observability.Middleware(
+			jwtMiddleware.Handler(
+				proxy.CompressionMiddleware(
+					sec.Handler(
+						cache.Middleware(c, p),
+					),
 				),
 			),
 		),
@@ -192,7 +204,6 @@ func main() {
 	} else {
 		slog.Info("EdgeFlow starting", "port", port, "origins", cfg.Origins)
 		slog.Info("Dashboard at http://localhost:"+port+"/dashboard")
-		slog.Info("To enable TLS: TLS_ENABLED=true go run main.go")
 		if err := http.ListenAndServe(":"+port, mux); err != nil {
 			slog.Error("server failed", "error", err)
 			os.Exit(1)
