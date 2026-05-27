@@ -103,7 +103,7 @@ Origin 1   Origin 2   Origin N
 
 **Grafana Dashboard** — live metrics showing requests/sec, cache hit rate, p99 latency, and active connections
 
-![Grafana Dashboard](docs/screenshots/grafana-dashboard.png)
+![Grafana Dashboard](https://raw.githubusercontent.com/anmol1505/edgeflow/main/docs/screenshots/grafana-dashboard.png)
 
 ---
 
