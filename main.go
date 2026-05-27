@@ -22,6 +22,16 @@ func main() {
 		port = "8080"
 	}
 
+	tlsEnabled := os.Getenv("TLS_ENABLED") == "true"
+	certFile := os.Getenv("CERT_FILE")
+	if certFile == "" {
+		certFile = "certs/cert.pem"
+	}
+	keyFile := os.Getenv("KEY_FILE")
+	if keyFile == "" {
+		keyFile = "certs/key.pem"
+	}
+
 	jwtSecret := os.Getenv("JWT_SECRET")
 	if jwtSecret == "" {
 		jwtSecret = "edgeflow-secret-key-change-in-production"
@@ -55,7 +65,6 @@ func main() {
 		Allowlist:    cfg.Allowlist,
 	})
 
-	// JWT middleware - exclude public paths
 	jwtMiddleware := security.NewJWTMiddleware(jwtSecret, []string{
 		"/health",
 		"/metrics",
@@ -76,7 +85,6 @@ func main() {
 
 	mux := http.NewServeMux()
 
-	// Public endpoints
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		currentCfg := cfgWatcher.Get()
@@ -88,6 +96,7 @@ func main() {
 			"circuit_breaker": sec.CircuitBreaker().State(),
 			"hash_ring_size":  balancer.RingSize(),
 			"lb_strategy":     "consistent_hash",
+			"tls_enabled":     tlsEnabled,
 			"config": map[string]any{
 				"rate_limit": currentCfg.RateLimit,
 				"blocklist":  currentCfg.Blocklist,
@@ -95,7 +104,6 @@ func main() {
 		})
 	})
 
-	// Token generation endpoint
 	mux.HandleFunc("/auth/token", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -158,7 +166,6 @@ func main() {
 		http.Error(w, "provide key or prefix", http.StatusBadRequest)
 	})
 
-	// Full pipeline with JWT: Observability -> JWT -> Compression -> Security -> Cache -> Proxy
 	mux.Handle("/", observability.Middleware(
 		jwtMiddleware.Handler(
 			proxy.CompressionMiddleware(
@@ -169,12 +176,26 @@ func main() {
 		),
 	))
 
-	slog.Info("EdgeFlow starting", "port", port, "origins", cfg.Origins)
-	slog.Info("Dashboard at http://localhost:"+port+"/dashboard")
-	slog.Info("JWT auth enabled, get token at POST /auth/token")
-
-	if err := http.ListenAndServe(":"+port, mux); err != nil {
-		slog.Error("server failed", "error", err)
-		os.Exit(1)
+	if tlsEnabled {
+		tlsServer := proxy.NewTLSServer(
+			":8443",
+			":"+port,
+			certFile,
+			keyFile,
+			mux,
+		)
+		slog.Info("TLS enabled", "cert", certFile, "key", keyFile)
+		if err := tlsServer.Start(); err != nil {
+			slog.Error("TLS server failed", "error", err)
+			os.Exit(1)
+		}
+	} else {
+		slog.Info("EdgeFlow starting", "port", port, "origins", cfg.Origins)
+		slog.Info("Dashboard at http://localhost:"+port+"/dashboard")
+		slog.Info("To enable TLS: TLS_ENABLED=true go run main.go")
+		if err := http.ListenAndServe(":"+port, mux); err != nil {
+			slog.Error("server failed", "error", err)
+			os.Exit(1)
+		}
 	}
 }
