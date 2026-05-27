@@ -36,7 +36,8 @@ func (rl *RateLimiter) Allow(ip string) bool {
 	defer rl.mu.Unlock()
 	b, ok := rl.buckets[ip]
 	if !ok {
-		rl.buckets[ip] = &bucket{tokens: rl.capacity, lastSeen: time.Now()}
+		// New IP — start with full capacity minus one token
+		rl.buckets[ip] = &bucket{tokens: rl.capacity - 1, lastSeen: time.Now()}
 		return true
 	}
 	now := time.Now()
