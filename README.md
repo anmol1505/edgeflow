@@ -96,6 +96,15 @@ Origin 1   Origin 2   Origin N
 - Live admin dashboard at `/dashboard` with 2-second refresh
 - Grafana dashboard with Prometheus datasource
 
+
+---
+
+## Screenshots
+
+**Grafana Dashboard** — live metrics showing requests/sec, cache hit rate, p99 latency, and active connections
+
+![Grafana Dashboard](docs/screenshots/grafana-dashboard.png)
+
 ---
 
 ## Benchmark Results
